@@ -2,20 +2,31 @@
 import streamlit as st
 import requests
 import re
+import pandas as pd
 
 # --- Stedi API Logic ---
 
-def create_stedi_provider(api_key, provider_details, contact_details):
-    """
-    Calls the Stedi API to create a new provider.
-    """
+def find_existing_provider(api_key, npi):
+    """Checks if a provider exists by searching for their NPI."""
     endpoint_url = "https://enrollments.us.stedi.com/2024-09-01/providers"
+    headers = {"Authorization": api_key}
+    params = {"filter": npi}
     
-    headers = {
-        "Authorization": api_key,
-        "Content-Type": "application/json"
-    }
-    
+    try:
+        response = requests.get(endpoint_url, headers=headers, params=params)
+        response.raise_for_status()
+        data = response.json()
+        
+        if data.get("items") and data["items"][0].get("npi") == npi:
+            return data["items"][0].get("id")
+        return None
+    except requests.exceptions.RequestException:
+        return None
+
+def create_stedi_provider(api_key, provider_details, contact_details):
+    """Calls the Stedi API to create a new provider."""
+    endpoint_url = "https://enrollments.us.stedi.com/2024-09-01/providers"
+    headers = {"Authorization": api_key, "Content-Type": "application/json"}
     payload = {
         "name": provider_details["name"],
         "npi": provider_details["npi"],
@@ -38,23 +49,28 @@ def create_stedi_provider(api_key, provider_details, contact_details):
                 error_message = e.response.text
         return {"success": False, "error": error_message}
 
-def create_stedi_enrollment(api_key, provider_id, payer_id, user_email, contact_details, transactions_to_enroll):
-    """
-    Calls the Stedi API to create an enrollment for a provider.
-    """
+def find_existing_enrollment(api_key, npi, payer_id):
+    """Checks if an enrollment exists for a given NPI and Payer ID."""
     endpoint_url = "https://enrollments.us.stedi.com/2024-09-01/enrollments"
-    
-    headers = {
-        "Authorization": api_key,
-        "Content-Type": "application/json"
-    }
-    
-    # Build the 'transactions' object based on user's selections
-    transactions_payload = {
-        key: {"enroll": True} for key in transactions_to_enroll
-    }
+    headers = {"Authorization": api_key}
+    params = {"providerNpis": npi, "payerIds": payer_id}
 
-    # Payload structure from the documentation
+    try:
+        response = requests.get(endpoint_url, headers=headers, params=params)
+        response.raise_for_status()
+        data = response.json()
+        
+        # If 'items' has content, an enrollment exists.
+        return bool(data.get("items"))
+    except requests.exceptions.RequestException:
+        return False
+
+def create_stedi_enrollment(api_key, provider_id, payer_id, user_email, contact_details, transactions_to_enroll):
+    """Calls the Stedi API to create an enrollment for a provider."""
+    endpoint_url = "https://enrollments.us.stedi.com/2024-09-01/enrollments"
+    headers = {"Authorization": api_key, "Content-Type": "application/json"}
+    
+    transactions_payload = {key: {"enroll": True} for key in transactions_to_enroll}
     payload = {
         "provider": {"id": provider_id},
         "payer": {"idOrAlias": payer_id},
@@ -62,7 +78,7 @@ def create_stedi_enrollment(api_key, provider_id, payer_id, user_email, contact_
         "primaryContact": contact_details,
         "transactions": transactions_payload,
         "source": "API",
-        "status": "SUBMITTED" # Automatically submit the enrollment
+        "status": "SUBMITTED"
     }
     
     try:
@@ -84,7 +100,6 @@ def create_stedi_enrollment(api_key, provider_id, payer_id, user_email, contact_
 st.set_page_config(layout="wide", page_title="Stedi Onboarding Tool")
 st.title("🚀 Stedi Provider Onboarding Tool")
 
-# --- UI Column Layout ---
 col1, col2 = st.columns(2)
 
 with col1:
@@ -92,19 +107,15 @@ with col1:
     st.subheader("API and Payer Details")
     api_key = st.text_input("Stedi API Key", type="password")
     payer_id = st.text_input("Payer ID")
-    user_email = st.text_input("Your Email for Notifications", help="Stedi will use this email to send you updates about the enrollment status.")
+    user_email = st.text_input("Your Email for Notifications", help="Stedi will use this email for enrollment status updates.")
 
     st.subheader("Transaction Types to Enroll")
-    st.info("Select all transaction types you want to enroll providers in for this batch.")
+    st.info("Select transaction types for this batch.")
     
-    # Transaction types from the API documentation
     transaction_options = {
-        "835 Claim Payments (ERAs)": "claimPayment",
-        "837P Professional Claims": "professionalClaimSubmission",
-        "270 Eligibility Checks": "eligibilityCheck",
-        "276 Claim Status": "claimStatus",
-        "837I Institutional Claims": "institutionalClaimSubmission",
-        "837D Dental Claims": "dentalClaimSubmission",
+        "835 Claim Payments (ERAs)": "claimPayment", "837P Professional Claims": "professionalClaimSubmission",
+        "270 Eligibility Checks": "eligibilityCheck", "276 Claim Status": "claimStatus",
+        "837I Institutional Claims": "institutionalClaimSubmission", "837D Dental Claims": "dentalClaimSubmission",
     }
     
     selected_transactions = [
@@ -114,7 +125,7 @@ with col1:
 
 with col2:
     st.header("2. Default Contact")
-    st.info("This contact will be used for all providers in the list below.")
+    st.info("This contact is used for all providers in the list.")
     contact_first_name = st.text_input("Contact First Name", "John")
     contact_last_name = st.text_input("Contact Last Name", "Doe")
     contact_email = st.text_input("Contact Email", "john.doe@example.com")
@@ -124,83 +135,76 @@ with col2:
     contact_state = st.text_input("State (2-letter abbr.)", "CA")
     contact_zip = st.text_input("Zip Code", "12345")
 
-
 st.header("3. Provider List")
-provider_data_input = st.text_area(
-    "Enter one provider per line: Name, NPI, Tax ID",
-    height=200,
-    placeholder="Example Clinic, 1999999992, 555123456\nAnother Hospital; 1888888881; 123456789"
-)
-tax_id_type = st.radio(
-    "Tax ID Type for all providers in this batch:",
-    ("EIN", "SSN"),
-    horizontal=True
-)
+provider_data_input = st.text_area("Enter one provider per line: Name, NPI, Tax ID", height=200, placeholder="Example Clinic, 1999999992, 555123456\nAnother Hospital; 1888888881; 123456789")
+tax_id_type = st.radio("Tax ID Type for all providers:", ("EIN", "SSN"), horizontal=True)
 
 st.header("4. Run and Monitor")
 if st.button("Start Onboarding Process", type="primary"):
-    # --- Input Validation ---
-    contact_details = {
-        "firstName": contact_first_name, "lastName": contact_last_name,
-        "email": contact_email, "phone": contact_phone,
-        "streetAddress1": contact_address1, "city": contact_city,
-        "state": contact_state, "zipCode": contact_zip
-    }
+    # --- Input Validation and Data Parsing ---
+    contact_details = {"firstName": contact_first_name, "lastName": contact_last_name, "email": contact_email, "phone": contact_phone, "streetAddress1": contact_address1, "city": contact_city, "state": contact_state, "zipCode": contact_zip}
     
-    is_config_valid = all([api_key, payer_id, user_email, provider_data_input])
-    is_contact_valid = all(contact_details.values())
-    
-    if not is_config_valid or not is_contact_valid or not selected_transactions:
+    if not all([api_key, payer_id, user_email, provider_data_input]) or not all(contact_details.values()) or not selected_transactions:
         st.error("⚠️ Please fill in all fields and select at least one transaction type.")
     else:
-        # --- Data Parsing ---
         lines = provider_data_input.strip().split('\n')
-        providers_to_process = []
-        for i, line in enumerate(lines):
-            if not line.strip(): continue
-            parts = re.split(r'[;,]', line.strip(), 2)
-            if len(parts) == 3:
-                providers_to_process.append({
-                    'name': parts[0].strip(), 'npi': parts[1].strip(),
-                    'taxId': parts[2].strip(), 'taxIdType': tax_id_type
-                })
-            else:
-                st.warning(f"Skipping line {i+1} due to invalid format: '{line}'")
+        providers_to_process = [{'name': parts[0].strip(), 'npi': parts[1].strip(), 'taxId': parts[2].strip(), 'taxIdType': tax_id_type} for line in lines if line.strip() and len(parts := re.split(r'[;,]', line.strip(), 2)) == 3]
 
         if providers_to_process:
             st.info(f"Found {len(providers_to_process)} providers to process.")
             progress_bar = st.progress(0, text="Starting Process...")
             status_log = st.container()
-            
+            summary_data = []
+
             for i, provider in enumerate(providers_to_process):
-                progress_text = f"Processing provider {i+1} of {len(providers_to_process)}: {provider['name']}"
-                progress_bar.progress((i + 1) / len(providers_to_process), text=progress_text)
+                progress_bar.progress((i + 1) / len(providers_to_process), text=f"Processing {i+1}/{len(providers_to_process)}: {provider['name']}")
                 
                 with status_log:
-                    st.markdown(f"--- \n\n**Processing:** `{provider['name']}` (NPI: {provider['npi']})")
+                    st.markdown(f"--- \n**Processing:** `{provider['name']}` (NPI: {provider['npi']})")
                 
-                # --- Step 1: Create Provider ---
-                create_response = create_stedi_provider(api_key, provider, contact_details)
-
-                if create_response['success']:
-                    provider_id = create_response['data'].get('id')
+                provider_status, enrollment_status, details = "Pending", "Pending", ""
+                
+                # Step 1: Check for existing provider
+                provider_id = find_existing_provider(api_key, provider['npi'])
+                if provider_id:
                     with status_log:
-                        st.success(f"✅ Provider '{provider['name']}' created successfully! (ID: {provider_id})")
-
-                    # --- Step 2: Create Enrollment ---
-                    enroll_response = create_stedi_enrollment(
-                        api_key, provider_id, payer_id, user_email, contact_details, selected_transactions
-                    )
-                    if enroll_response['success']:
-                        enrollment_id = enroll_response['data'].get('id')
+                        st.info(f"ℹ️ Provider found. Using ID: {provider_id}")
+                    provider_status = "Found"
+                else:
+                    create_response = create_stedi_provider(api_key, provider, contact_details)
+                    if create_response['success']:
+                        provider_id = create_response['data'].get('id')
                         with status_log:
-                            st.success(f"✅ Enrollment for '{provider['name']}' submitted! (Enrollment ID: {enrollment_id})")
+                            st.success(f"✅ Provider created successfully! (ID: {provider_id})")
+                        provider_status = "Created"
                     else:
-                         with status_log:
-                            st.error(f"❌ Enrollment failed for '{provider['name']}': {enroll_response['error']}")
-                else: # Failed to create provider
-                    with status_log:
-                        st.error(f"❌ Failed to create provider '{provider['name']}': {create_response['error']}")
-            
-            st.balloons()
+                        error_msg = create_response['error']
+                        with status_log:
+                            st.error(f"❌ Failed to create provider: {error_msg}")
+                        summary_data.append([provider['name'], provider['npi'], "Error", "Skipped", error_msg])
+                        continue
+
+                # Step 2: Check for existing enrollment
+                if provider_id:
+                    if find_existing_enrollment(api_key, provider['npi'], payer_id):
+                        with status_log:
+                            st.warning(f"⚠️ Enrollment already exists. Skipped.")
+                        enrollment_status, details = "Skipped (Exists)", "N/A"
+                    else:
+                        enroll_response = create_stedi_enrollment(api_key, provider_id, payer_id, user_email, contact_details, selected_transactions)
+                        if enroll_response['success']:
+                            enrollment_id = enroll_response['data'].get('id')
+                            with status_log:
+                                st.success(f"✅ Enrollment submitted! (ID: {enrollment_id})")
+                            enrollment_status, details = "Submitted", enrollment_id
+                        else:
+                            error_msg = enroll_response['error']
+                            with status_log:
+                                st.error(f"❌ Enrollment failed: {error_msg}")
+                            enrollment_status, details = "Error", error_msg
+                summary_data.append([provider['name'], provider['npi'], provider_status, enrollment_status, details])
+
             st.header("🎉 Process Complete!")
+            st.subheader("Summary Report")
+            summary_df = pd.DataFrame(summary_data, columns=["Provider Name", "NPI", "Provider Status", "Enrollment Status", "Details/ID"])
+            st.dataframe(summary_df, use_container_width=True)
