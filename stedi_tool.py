@@ -105,7 +105,10 @@ with col1:
     st.header("1. Configuration")
     st.subheader("API and Payer Details")
     api_key: str = st.text_input("Stedi API Key", type="password")
-    payer_id: str = st.text_input("Payer ID")
+    payer_id: str = st.text_input(
+        "Payer ID",
+        help="You can find the Payer ID on the [Stedi Payer Network page](https://www.stedi.com/healthcare/network)."
+    )
     user_email: str = st.text_input("Your Email for Notifications", help="Stedi will use this email for enrollment status updates.")
 
     st.subheader("Transaction Types to Enroll")
@@ -127,7 +130,7 @@ with col2:
     st.info("This contact is used for all providers in the list.")
     contact_first_name: str = st.text_input("Contact First Name", "John")
     contact_last_name: str = st.text_input("Contact Last Name", "Doe")
-    contact_email: str = st.text_input("Contact Email", "john.doe@thoughtful.ai")
+    contact_email: str = st.text_input("Contact Email", "john.doe@example.com")
     contact_phone: str = st.text_input("Contact Phone", "555-555-5555")
     contact_address1: str = st.text_input("Street Address 1", "123 Main St")
     contact_city: str = st.text_input("City", "Anytown")
@@ -206,3 +209,4 @@ if st.button("Start Onboarding Process", type="primary"):
             st.subheader("Summary Report")
             summary_df: pd.DataFrame = pd.DataFrame(summary_data, columns=["Provider Name", "NPI", "Provider Status", "Enrollment Status", "Details/ID"])
             st.dataframe(summary_df, use_container_width=True)
+
